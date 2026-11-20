@@ -1,18 +1,20 @@
 {
+  "id": "/Estrategias/",
   "name": "Control de Guardias y Relevos",
   "short_name": "Guardias",
   "description": "Plataforma multi-institucional para gestión de guardias, relevos y bitácora clínica.",
   "start_url": "./index.html",
+  "scope": "./",
   "display": "standalone",
   "background_color": "#f8fafc",
   "theme_color": "#0284c7",
   "orientation": "portrait",
   "icons": [
     {
-      "src": "https://cdn-icons-png.flaticon.com/512/2966/2966327.png",
+      "src": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3E%3Crect width='512' height='512' rx='100' fill='%230284c7'/%3E%3Cpath d='M216 112h80v104h104v80H296v104h-80V296H112v-80h104z' fill='white'/%3E%3C/svg%3E",
       "sizes": "512x512",
-      "type": "image/png",
-      "purpose": "any maskable"
+      "type": "image/svg+xml",
+      "purpose": "any"
     }
   ]
 }
