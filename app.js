@@ -68,7 +68,6 @@ function normalizarInstitucion(texto) {
     }
   }
 
-  // Revisar si ya existe en el catálogo dinámico de la nube
   const existente = listaInstitucionesNube.find(inst => limpiarTextoBase(inst) === limpio);
   if (existente) return existente;
 
@@ -166,7 +165,7 @@ async function registrarUnidadEnCatalogoNube(zonaNormalizada, instNormalizada) {
 }
 
 // =========================================================================
-// CATÁLOGO Y VARIABLES EN MEMORIA SINCRONIZADA
+// CATÁLOGO DE ÁREAS, TURNOS Y HORARIOS INSTITUCIONALES
 // =========================================================================
 const AREAS_CLINICAS = [
   "Hospitalización",
@@ -179,9 +178,13 @@ const AREAS_CLINICAS = [
   "CEyE"
 ];
 
-const TABULADOR_BASE = {
-  Diurno: 650,
-  Nocturno: 1300
+const CONFIG_TURNOS = {
+  "Matutino": { inicio: "07:00", fin: "14:30", base: 650, categoria: "sencillo" },
+  "Vespertino": { inicio: "14:00", fin: "21:30", base: 650, categoria: "sencillo" },
+  "Nocturno": { inicio: "21:00", fin: "07:30", base: 1300, categoria: "largo" },
+  "Jornada Acumulada": { inicio: "07:00", fin: "19:00", base: 1300, categoria: "largo" },
+  // Compatibilidad con registros anteriores
+  "Diurno": { inicio: "07:00", fin: "19:00", base: 650, categoria: "sencillo" }
 };
 
 let usuarios = [];
@@ -199,7 +202,6 @@ let usuarioActivo = JSON.parse(localStorage.getItem('guardia_user_obj')) || null
 // ESCUCHA EN TIEMPO REAL CON FIRESTORE
 // =========================================================================
 function iniciarSincronizacionNube() {
-  // 0. Escuchar Catálogo Desplegable de Zonas e Instituciones
   db.collection('configuracion').doc('catalogo_unidades').onSnapshot(doc => {
     if (doc.exists) {
       const data = doc.data();
@@ -214,7 +216,6 @@ function iniciarSincronizacionNube() {
     if (usuarioActivo) cargarFormularioEditarPerfil();
   });
 
-  // 1. Escuchar Usuarios y aprender sus unidades si aún no estaban en el catálogo
   db.collection('usuarios').onSnapshot(snapshot => {
     usuarios = snapshot.docs.map(doc => doc.data());
     usuarios.forEach(u => {
@@ -240,7 +241,6 @@ function iniciarSincronizacionNube() {
     }
   });
 
-  // 2. Escuchar Guardias en tiempo real
   db.collection('guardias').orderBy('creadaEn', 'desc').onSnapshot(snapshot => {
     const nuevasGuardias = snapshot.docs.map(doc => {
       const data = doc.data();
@@ -251,9 +251,10 @@ function iniciarSincronizacionNube() {
     if (cargaInicialCompleta && usuarioActivo) {
       nuevasGuardias.forEach(g => {
         if (!idsGuardiasConocidas.has(g.id) && perteneceAMiUnidad(g) && g.solicitanteUser !== usuarioActivo.user && g.estado === 'Pendiente') {
+          const horarioTxt = formatearHorarioGuardia(g);
           mostrarNotificacionLocal(
             `🚨 Nueva Guardia en ${g.servicio}`,
-            `${g.solicitante} solicita relevo (${g.fecha}, ${g.turno}) por $${g.honorario} MXN.`
+            `${g.solicitante} solicita relevo (${g.fecha}, ${g.turno} ${horarioTxt}) por $${g.honorario} MXN.`
           );
         }
       });
@@ -271,7 +272,6 @@ function iniciarSincronizacionNube() {
     }
   });
 
-  // 3. Escuchar Insumos en tiempo real
   db.collection('insumos').onSnapshot(snapshot => {
     insumos = snapshot.docs.map(doc => doc.data());
     if (usuarioActivo) {
@@ -325,15 +325,27 @@ async function activarNotificacionesPush() {
 }
 
 // =========================================================================
-// TABULADOR DINÁMICO ANTI-INFLACIÓN
+// TABULADOR DINÁMICO ANTI-INFLACIÓN Y HORARIOS EXACTOS
 // =========================================================================
-function calcularReglasTabulador(fechaStr, turno) {
-  const horaInicio = turno === 'Nocturno' ? '19:00:00' : '07:00:00';
-  const fechaTurnoMs = new Date(`${fechaStr}T${horaInicio}`).getTime();
+function obtenerConfigTurno(turno) {
+  return CONFIG_TURNOS[turno] || { inicio: "07:00", fin: "19:00", base: 650, categoria: "sencillo" };
+}
+
+function formatearHorarioGuardia(g) {
+  const cfg = obtenerConfigTurno(g.turno);
+  const inicio = g.horaInicio || cfg.inicio;
+  const fin = g.horaFin || cfg.fin;
+  return `${inicio} - ${fin}`;
+}
+
+function calcularReglasTabulador(fechaStr, turno, horaInicioCustom = null) {
+  const cfg = obtenerConfigTurno(turno);
+  const horaInicio = horaInicioCustom || cfg.inicio;
+  const fechaTurnoMs = new Date(`${fechaStr}T${horaInicio}:00`).getTime();
   const ahora = Date.now();
   const horasRestantes = (fechaTurnoMs - ahora) / 3600000;
 
-  const base = turno === 'Nocturno' ? TABULADOR_BASE.Nocturno : TABULADOR_BASE.Diurno;
+  const base = cfg.base;
 
   let nivel = 'Programada (+48h)';
   let claseUrgencia = 'urg-normal';
@@ -422,8 +434,9 @@ function obtenerInfoRelojGuardia(g) {
     textoTranscurrido = 'Registrada';
   }
 
-  const horaInicio = g.turno === 'Nocturno' ? '19:00:00' : '07:00:00';
-  const fechaTurnoMs = new Date(`${g.fecha}T${horaInicio}`).getTime();
+  const cfg = obtenerConfigTurno(g.turno);
+  const horaInicio = g.horaInicio || cfg.inicio;
+  const fechaTurnoMs = new Date(`${g.fecha}T${horaInicio}:00`).getTime();
   const diffTurnoMs = fechaTurnoMs - ahora;
 
   let textoRestante = '';
@@ -768,8 +781,8 @@ function puedeCubrir(nombrePersona, fechaGuardia, tipoTurno) {
   const anio = d.getFullYear();
   const esPrimeraQuincena = d.getDate() <= 15;
 
-  let diurnas = 0;
-  let nocturnas = 0;
+  let sencillos = 0; // Matutino / Vespertino / Diurno
+  let largos = 0;    // Nocturno / Jornada Acumulada
 
   guardias.forEach(g => {
     if (g.asignadoA === nombrePersona && (g.estado === 'Asignada' || g.estado === 'Realizada')) {
@@ -777,23 +790,25 @@ function puedeCubrir(nombrePersona, fechaGuardia, tipoTurno) {
       if (gd.getFullYear() === anio && gd.getMonth() === mes) {
         const gPrimera = gd.getDate() <= 15;
         if (esPrimeraQuincena === gPrimera) {
-          if (g.turno === 'Diurno') diurnas++;
-          if (g.turno === 'Nocturno') nocturnas++;
+          const cat = obtenerConfigTurno(g.turno).categoria;
+          if (cat === 'sencillo') sencillos++;
+          if (cat === 'largo') largos++;
         }
       }
     }
   });
 
-  let nuevoD = diurnas + (tipoTurno === 'Diurno' ? 1 : 0);
-  let nuevoN = nocturnas + (tipoTurno === 'Nocturno' ? 1 : 0);
+  const nuevaCat = obtenerConfigTurno(tipoTurno).categoria;
+  let nuevoS = sencillos + (nuevaCat === 'sencillo' ? 1 : 0);
+  let nuevoL = largos + (nuevaCat === 'largo' ? 1 : 0);
 
-  if (nuevoN === 0 && nuevoD <= 3) return { valido: true };
-  if (nuevoD === 0 && nuevoN <= 2) return { valido: true };
-  if (nuevoD === 1 && nuevoN === 1) return { valido: true };
+  if (nuevoL === 0 && nuevoS <= 3) return { valido: true };
+  if (nuevoS === 0 && nuevoL <= 2) return { valido: true };
+  if (nuevoS === 1 && nuevoL === 1) return { valido: true };
 
   return {
     valido: false,
-    msg: `Límite quincenal alcanzado (${diurnas} D / ${nocturnas} N). Máximo: 3 diurnas, 2 nocturnas o combinación estricta 1 y 1.`
+    msg: `Límite quincenal alcanzado (${sencillos} Mat/Vesp y ${largos} Noct/Acum). Máximo: 3 sencillos, 2 largos o combinación 1 y 1.`
   };
 }
 
@@ -815,7 +830,8 @@ function renderSolicitudes() {
 
   guardiasUnidad.forEach(g => {
     const esMia = g.solicitanteUser === usuarioActivo.user;
-    const reglas = calcularReglasTabulador(g.fecha, g.turno);
+    const reglas = calcularReglasTabulador(g.fecha, g.turno, g.horaInicio);
+    const horarioTxt = formatearHorarioGuardia(g);
     const yaMePostule = g.postulantes.some(p => p.user === usuarioActivo.user);
 
     let badgeClass = 'badge-pending';
@@ -838,7 +854,7 @@ function renderSolicitudes() {
           👥 Colegas postulados (${g.postulantes.length}):
         </div>
         ${g.postulantes.map((p, idx) => {
-          const msgWa = `Hola ${p.nombre}, vi tu postulación para mi guardia de ${g.servicio} el ${g.fecha}.`;
+          const msgWa = `Hola ${p.nombre}, vi tu postulación para mi guardia de ${g.servicio} (${g.turno} ${horarioTxt}) el ${g.fecha}.`;
           return `
             <div class="candidate-row">
               <div style="font-size: 12px;">
@@ -881,7 +897,7 @@ function renderSolicitudes() {
     const objSolicitante = usuarios.find(u => u.user === g.solicitanteUser);
     let waBtn = '';
     if (!esMia && objSolicitante && objSolicitante.whatsapp && g.estado !== 'Cancelada') {
-      const msg = `Hola ${g.solicitante}, te contacto por la guardia en ${g.servicio} (${g.fecha}, turno ${g.turno}).`;
+      const msg = `Hola ${g.solicitante}, te contacto por la guardia en ${g.servicio} (${g.fecha}, ${g.turno} ${horarioTxt}).`;
       waBtn = `<a href="${generarLinkWhatsApp(objSolicitante.whatsapp, msg)}" target="_blank" class="btn-wa">💬 WhatsApp a ${g.solicitante.split(' ')[0]}</a>`;
     }
 
@@ -896,7 +912,7 @@ function renderSolicitudes() {
     card.innerHTML = `
       <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 4px;">
         <div>
-          <strong>${g.servicio}</strong> — <span style="font-size: 13px;">Turno ${g.turno}</span><br>
+          <strong>${g.servicio}</strong> — <span style="font-size: 13px;">${g.turno} <strong>(${horarioTxt})</strong></span><br>
           <span style="font-size: 12px; color: var(--text-muted);">${g.fecha} | Solicita: <strong>${g.solicitante}</strong></span>
         </div>
         <div style="text-align: right;">
@@ -923,7 +939,7 @@ async function incrementarOfertaGuardia(idGuardia) {
   const g = guardias.find(x => x.id === idGuardia);
   if (!g) return;
 
-  const reglas = calcularReglasTabulador(g.fecha, g.turno);
+  const reglas = calcularReglasTabulador(g.fecha, g.turno, g.horaInicio);
   const nuevoMontoStr = prompt(
     `Nivel actual: ${reglas.nivel}\n` +
     `Oferta actual: $${g.honorario} MXN\n` +
@@ -967,7 +983,7 @@ async function postularme(idGuardia) {
     return;
   }
 
-  const reglas = calcularReglasTabulador(g.fecha, g.turno);
+  const reglas = calcularReglasTabulador(g.fecha, g.turno, g.horaInicio);
   const ofertaActual = g.honorario || reglas.base;
 
   const montoPropuestoStr = prompt(
@@ -1054,8 +1070,8 @@ async function cancelarSolicitud(idGuardia) {
 function abrirModalSolicitud() {
   const hoy = new Date().toISOString().split('T')[0];
   document.getElementById('sol-fecha').value = hoy;
-  document.getElementById('sol-turno').value = 'Diurno';
-  actualizarInfoTabuladorModal();
+  document.getElementById('sol-turno').value = 'Matutino';
+  alCambiarTurnoModal();
   document.getElementById('modal-solicitud').style.display = 'flex';
 }
 
@@ -1063,10 +1079,19 @@ function cerrarModalSolicitud() {
   document.getElementById('modal-solicitud').style.display = 'none';
 }
 
+function alCambiarTurnoModal() {
+  const turno = document.getElementById('sol-turno').value;
+  const cfg = obtenerConfigTurno(turno);
+  document.getElementById('sol-hora-inicio').value = cfg.inicio;
+  document.getElementById('sol-hora-fin').value = cfg.fin;
+  actualizarInfoTabuladorModal();
+}
+
 function actualizarInfoTabuladorModal() {
   const fecha = document.getElementById('sol-fecha').value || new Date().toISOString().split('T')[0];
   const turno = document.getElementById('sol-turno').value;
-  const reglas = calcularReglasTabulador(fecha, turno);
+  const horaInicio = document.getElementById('sol-hora-inicio').value || obtenerConfigTurno(turno).inicio;
+  const reglas = calcularReglasTabulador(fecha, turno, horaInicio);
 
   document.getElementById('sol-honorario').value = reglas.base;
   document.getElementById('sol-tabulador-info').innerHTML = `
@@ -1078,15 +1103,17 @@ function actualizarInfoTabuladorModal() {
 async function guardarNuevaSolicitud() {
   const fecha = document.getElementById('sol-fecha').value;
   const turno = document.getElementById('sol-turno').value;
+  const horaInicio = document.getElementById('sol-hora-inicio').value;
+  const horaFin = document.getElementById('sol-hora-fin').value;
   const servicio = document.getElementById('sol-servicio').value;
   const honorario = Number(document.getElementById('sol-honorario').value);
 
-  if (!fecha || !servicio) {
-    alert("Selecciona la fecha y el servicio clínico.");
+  if (!fecha || !servicio || !horaInicio || !horaFin) {
+    alert("Completa la fecha, el horario de entrada/salida y el servicio clínico.");
     return;
   }
 
-  const reglas = calcularReglasTabulador(fecha, turno);
+  const reglas = calcularReglasTabulador(fecha, turno, horaInicio);
 
   if (isNaN(honorario) || honorario < reglas.base) {
     alert(`El honorario ofrecido no puede ser menor al tabulador base ($${reglas.base} MXN).`);
@@ -1108,6 +1135,8 @@ async function guardarNuevaSolicitud() {
     institucion: normalizarInstitucion(usuarioActivo.institucion),
     fecha: fecha,
     turno: turno,
+    horaInicio: horaInicio,
+    horaFin: horaFin,
     servicio: servicio,
     estado: 'Pendiente',
     postulantes: [],
@@ -1180,7 +1209,7 @@ function renderTablaEfectividad() {
 async function editarMontoPactado(idGuardia) {
   const g = guardias.find(x => x.id === idGuardia);
   if (!g) return;
-  const reglas = calcularReglasTabulador(g.fecha, g.turno);
+  const reglas = calcularReglasTabulador(g.fecha, g.turno, g.horaInicio);
   const nuevoMonto = prompt(
     `Ingresa el monto final pactado ($) (Tope permitido: $${reglas.montoMaximo}):`,
     g.montoPactado || g.honorario
@@ -1213,6 +1242,7 @@ function renderBitacora() {
   } else {
     contPedidos.innerHTML = misPedidos.map(g => {
       const monto = Number(g.montoPactado || g.honorario || 650);
+      const horarioTxt = formatearHorarioGuardia(g);
       if (g.estado === 'Asignada' || g.estado === 'Realizada') {
         totalEgresos += monto;
       }
@@ -1220,7 +1250,7 @@ function renderBitacora() {
       return `
         <div style="font-size: 12px; padding: 8px 0; border-bottom: 1px solid var(--border);">
           <div style="display: flex; justify-content: space-between;">
-            <strong>${g.fecha} - ${g.servicio} (${g.turno})</strong>
+            <strong>${g.fecha} - ${g.servicio} (${g.turno} ${horarioTxt})</strong>
             <strong style="color: ${g.estado === 'Cancelada' ? 'var(--text-muted)' : 'var(--danger)'};">
               ${g.estado === 'Cancelada' ? '$0' : `-$${monto}`}
             </strong>
@@ -1243,12 +1273,13 @@ function renderBitacora() {
   } else {
     contCoberturas.innerHTML = misCoberturas.map(g => {
       const monto = Number(g.montoPactado || g.honorario || 650);
+      const horarioTxt = formatearHorarioGuardia(g);
       totalIngresos += monto;
 
       return `
         <div style="font-size: 12px; padding: 8px 0; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center;">
           <div>
-            <strong>${g.fecha}</strong> - ${g.servicio} (${g.turno})<br>
+            <strong>${g.fecha}</strong> - ${g.servicio} (${g.turno} ${horarioTxt})<br>
             Solicitante: ${g.solicitante} | Pactado: <strong style="color: var(--success);">+$${monto}</strong><br>
             Estado: <span class="badge ${g.estado === 'Realizada' ? 'badge-done' : 'badge-assigned'}">${g.estado}</span>
             <button class="btn btn-secondary" style="width: auto; padding: 2px 6px; font-size: 10px; margin-left: 4px;" onclick="editarMontoPactado(${g.id})">✏️ Monto</button>
@@ -1352,8 +1383,9 @@ function mostrarDetallesDia(fechaStr, eventos) {
   }
   let html = `<h4 style="font-size: 13px; margin-bottom: 6px;">Turnos: ${fechaStr}</h4>`;
   eventos.forEach(e => {
+    const horarioTxt = formatearHorarioGuardia(e);
     html += `<div style="font-size: 12px; border-bottom: 1px solid var(--border); padding: 4px 0;">
-      <strong>${e.turno}</strong> en ${e.servicio} (${e.estado}) - $${e.montoPactado || e.honorario || 650}<br>
+      <strong>${e.turno} (${horarioTxt})</strong> en ${e.servicio} (${e.estado}) - $${e.montoPactado || e.honorario || 650}<br>
       <span style="color: var(--text-muted);">Solicitó: ${e.solicitante} ${e.asignadoA ? `| Cubre: ${e.asignadoA}` : ''}</span>
     </div>`;
   });
@@ -1387,7 +1419,7 @@ function renderPadron() {
         <strong>Áreas:</strong> ${formatearAreasTexto(e.areas)}
       </div>
       <div style="margin-top: 6px; font-size: 12px; background: #f8fafc; padding: 6px; border-radius: 4px;">
-        Diurna: <strong>$${e.honorarioDiurno || 650}</strong> | Nocturna: <strong>$${e.honorarioNocturno || 1300}</strong>
+        Mat/Vesp: <strong>$${e.honorarioDiurno || 650}</strong> | Noct/Acum: <strong>$${e.honorarioNocturno || 1300}</strong>
       </div>
       ${!esYo && e.whatsapp ? `<a href="${generarLinkWhatsApp(e.whatsapp, msgWa)}" target="_blank" class="btn-wa" style="width: 100%; margin-top: 8px;">💬 Contactar por WhatsApp</a>` : ''}
     `;
