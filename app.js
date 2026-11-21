@@ -1,4 +1,37 @@
-// CATÁLOGO DE ÁREAS CLÍNICAS ESTÁNDAR
+// =========================================================================
+// CONFIGURACIÓN DE FIREBASE (CONECTADO A ESTRATEGIAS-EA93F)
+// =========================================================================
+const firebaseConfig = {
+  apiKey: "AIzaSyAddWXaYA9_Vek00Mye8Af6HtsCjS8t9uY",
+  authDomain: "estrategias-ea93f.firebaseapp.com",
+  projectId: "estrategias-ea93f",
+  storageBucket: "estrategias-ea93f.firebasestorage.app",
+  messagingSenderId: "672197334579",
+  appId: "1:672197334579:web:41e39550e62bda3972b546",
+  measurementId: "G-VBM134K4VY"
+};
+
+const VAPID_KEY = "BBGBDlOErqnSg_eiLfnY8yQ_SSa5LCKcckfdTkYb5-Df8Aw-c4Qc41bwQ3R1JIh9MhaXORkQ9G7StjZ0okIJFQY";
+
+firebase.initializeApp(firebaseConfig);
+const db = firebase.firestore();
+let messaging = null;
+try {
+  messaging = firebase.messaging();
+} catch (e) {
+  console.warn("FCM no soportado en este navegador:", e);
+}
+
+let swRegistration = null;
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('./sw.js')
+    .then(reg => { swRegistration = reg; })
+    .catch(err => console.error('Error SW:', err));
+}
+
+// =========================================================================
+// CATÁLOGO Y VARIABLES EN MEMORIA SINCRONIZADA
+// =========================================================================
 const AREAS_CLINICAS = [
   "Hospitalización",
   "Urgencias",
@@ -10,67 +43,128 @@ const AREAS_CLINICAS = [
   "CEyE"
 ];
 
-// TARIFAS BASE INSTITUCIONALES DE REFERENCIA
 const TABULADOR_BASE = {
   Diurno: 650,
   Nocturno: 1300
 };
 
-// BASE DE DATOS LOCAL
-let usuarios = JSON.parse(localStorage.getItem('usuarios_db')) || [
-  { 
-    user: "enfermeria01", 
-    pass: "1234", 
-    nombre: "Lic. Manuel Huerta", 
-    whatsapp: "2281000001",
-    zona: "Xalapa",
-    institucion: "IMSS HGZ 11",
-    perfil: "Enfermero General", 
-    areas: ["UCI / Terapia Intensiva", "Urgencias"], 
-    honorarioDiurno: 650, 
-    honorarioNocturno: 1300,
-    foto: ""
-  }
-];
+let usuarios = [];
+let guardias = [];
+let insumos = [];
+let cargaInicialCompleta = false;
+let idsGuardiasConocidas = new Set();
 
-let guardias = JSON.parse(localStorage.getItem('guardias_db')) || [
-  { 
-    id: 101, 
-    creadaEn: Date.now() - 3600000 * 4,
-    solicitante: "Lic. Manuel Huerta", 
-    solicitanteUser: "enfermeria01",
-    zona: "Xalapa",
-    institucion: "IMSS HGZ 11",
-    fecha: "2026-11-25", 
-    turno: "Diurno", 
-    servicio: "Oncología", 
-    estado: "Pendiente",
-    postulantes: [],
-    asignadoA: null, 
-    asignadoUser: null,
-    honorario: 650,
-    montoPactado: 650
-  }
-];
-
-guardias.forEach(g => {
-  if (!Array.isArray(g.postulantes)) g.postulantes = [];
-});
-
-let insumos = JSON.parse(localStorage.getItem('insumos_db')) || [];
 let fotoTempReg = "";
 let fotoTempEdit = null;
-
 let fechaActual = new Date();
 let usuarioActivo = JSON.parse(localStorage.getItem('guardia_user_obj')) || null;
 
-function guardarDatos() {
-  localStorage.setItem('guardias_db', JSON.stringify(guardias));
-  localStorage.setItem('usuarios_db', JSON.stringify(usuarios));
-  localStorage.setItem('insumos_db', JSON.stringify(insumos));
+// =========================================================================
+// ESCUCHA EN TIEMPO REAL CON FIRESTORE
+// =========================================================================
+function iniciarSincronizacionNube() {
+  // 1. Escuchar Usuarios en tiempo real
+  db.collection('usuarios').onSnapshot(snapshot => {
+    usuarios = snapshot.docs.map(doc => doc.data());
+    if (usuarioActivo) {
+      const actualizado = usuarios.find(u => u.user.toLowerCase() === usuarioActivo.user.toLowerCase());
+      if (actualizado) {
+        usuarioActivo = actualizado;
+        localStorage.setItem('guardia_user_obj', JSON.stringify(usuarioActivo));
+      }
+      renderAlertas();
+      renderPadron();
+    }
+  });
+
+  // 2. Escuchar Guardias en tiempo real (ordenado por creación más reciente)
+  db.collection('guardias').orderBy('creadaEn', 'desc').onSnapshot(snapshot => {
+    const nuevasGuardias = snapshot.docs.map(doc => {
+      const data = doc.data();
+      if (!Array.isArray(data.postulantes)) data.postulantes = [];
+      return data;
+    });
+
+    // Detectar guardias nuevas en la unidad para disparar alerta en el dispositivo
+    if (cargaInicialCompleta && usuarioActivo) {
+      nuevasGuardias.forEach(g => {
+        if (!idsGuardiasConocidas.has(g.id) && perteneceAMiUnidad(g) && g.solicitanteUser !== usuarioActivo.user && g.estado === 'Pendiente') {
+          mostrarNotificacionLocal(
+            `🚨 Nueva Guardia en ${g.servicio}`,
+            `${g.solicitante} solicita relevo (${g.fecha}, ${g.turno}) por $${g.honorario} MXN.`
+          );
+        }
+      });
+    }
+
+    guardias = nuevasGuardias;
+    idsGuardiasConocidas = new Set(guardias.map(g => g.id));
+    cargaInicialCompleta = true;
+
+    if (usuarioActivo) {
+      renderAlertas();
+      renderSolicitudes();
+      renderBitacora();
+      renderCalendario();
+    }
+  });
+
+  // 3. Escuchar Insumos en tiempo real
+  db.collection('insumos').onSnapshot(snapshot => {
+    insumos = snapshot.docs.map(doc => doc.data());
+    if (usuarioActivo) {
+      renderBitacora();
+    }
+  });
 }
 
+function mostrarNotificacionLocal(titulo, cuerpo) {
+  if ('Notification' in window && Notification.permission === 'granted') {
+    if (swRegistration) {
+      swRegistration.showNotification(titulo, {
+        body: cuerpo,
+        icon: 'https://img.icons8.com/color/512/hospital-3.png'
+      });
+    } else {
+      new Notification(titulo, { body: cuerpo });
+    }
+  }
+}
+
+async function activarNotificacionesPush() {
+  if (!('Notification' in window)) {
+    alert("Este navegador no soporta notificaciones.");
+    return;
+  }
+  const permiso = await Notification.requestPermission();
+  if (permiso !== 'granted') {
+    alert("Permiso de notificaciones denegado. Actívalo en los ajustes de tu navegador.");
+    return;
+  }
+
+  try {
+    if (messaging && swRegistration) {
+      const token = await messaging.getToken({
+        vapidKey: VAPID_KEY,
+        serviceWorkerRegistration: swRegistration
+      });
+      if (token && usuarioActivo) {
+        usuarioActivo.fcmToken = token;
+        await db.collection('usuarios').doc(usuarioActivo.user.toLowerCase()).set(usuarioActivo, { merge: true });
+        localStorage.setItem('guardia_user_obj', JSON.stringify(usuarioActivo));
+      }
+    }
+    mostrarNotificacionLocal("✅ Notificaciones Activadas", "Recibirás alertas cuando publiquen guardias en tu unidad.");
+    alert("¡Notificaciones activadas correctamente en este dispositivo!");
+  } catch (err) {
+    console.error("Error obteniendo token:", err);
+    alert("Notificaciones locales activadas. (Si usas iPhone, recuerda instalar primero en pantalla de inicio).");
+  }
+}
+
+// =========================================================================
 // TABULADOR DINÁMICO ANTI-INFLACIÓN
+// =========================================================================
 function calcularReglasTabulador(fechaStr, turno) {
   const horaInicio = turno === 'Nocturno' ? '19:00:00' : '07:00:00';
   const fechaTurnoMs = new Date(`${fechaStr}T${horaInicio}`).getTime();
@@ -217,7 +311,9 @@ function procesarFoto(event, origen) {
   reader.readAsDataURL(file);
 }
 
-// AUTENTICACIÓN
+// =========================================================================
+// AUTENTICACIÓN EN FIRESTORE
+// =========================================================================
 function mostrarRegistro(mostrar) {
   document.getElementById('view-login').style.display = mostrar ? 'none' : 'block';
   document.getElementById('view-register').style.display = mostrar ? 'block' : 'none';
@@ -231,7 +327,7 @@ function mostrarRecuperar(mostrar) {
   document.getElementById('view-register').style.display = 'none';
 }
 
-function restablecerPassword() {
+async function restablecerPassword() {
   const user = document.getElementById('rec-user').value.trim();
   const nombre = document.getElementById('rec-nombre').value.trim();
   const newPass = document.getElementById('rec-new-pass').value.trim();
@@ -246,22 +342,26 @@ function restablecerPassword() {
     return;
   }
 
-  const usuarioEncontrado = usuarios.find(
-    u => u.user.toLowerCase() === user.toLowerCase() && u.nombre.toLowerCase() === nombre.toLowerCase()
-  );
+  const docRef = db.collection('usuarios').doc(user.toLowerCase());
+  const docSnap = await docRef.get();
 
-  if (!usuarioEncontrado) {
-    alert("No se encontró ninguna cuenta que coincida con esa matrícula y nombre completo.");
+  if (!docSnap.exists) {
+    alert("No se encontró ninguna cuenta con esa matrícula.");
     return;
   }
 
-  usuarioEncontrado.pass = newPass;
-  guardarDatos();
-  alert("¡Contraseña actualizada con éxito!");
+  const datos = docSnap.data();
+  if (datos.nombre.toLowerCase() !== nombre.toLowerCase()) {
+    alert("El nombre completo no coincide con el registrado para esa matrícula.");
+    return;
+  }
+
+  await docRef.update({ pass: newPass });
+  alert("¡Contraseña actualizada en la nube con éxito!");
   mostrarRecuperar(false);
 }
 
-function registrarUsuario() {
+async function registrarUsuario() {
   const nombre = document.getElementById('reg-nombre').value.trim();
   const user = document.getElementById('reg-user').value.trim();
   const pass = document.getElementById('reg-pass').value.trim();
@@ -279,8 +379,10 @@ function registrarUsuario() {
     return;
   }
 
-  if (usuarios.some(u => u.user.toLowerCase() === user.toLowerCase())) {
-    alert("Esta matrícula o usuario ya está registrado.");
+  const docRef = db.collection('usuarios').doc(user.toLowerCase());
+  const existe = await docRef.get();
+  if (existe.exists) {
+    alert("Esta matrícula o usuario ya está registrado en el sistema.");
     return;
   }
 
@@ -289,27 +391,33 @@ function registrarUsuario() {
     areas: areasSeleccionadas.length > 0 ? areasSeleccionadas : ["Hospitalización"], 
     honorarioDiurno: hd, honorarioNocturno: hn, foto: fotoTempReg 
   };
-  usuarios.push(nuevoUsuario);
-  guardarDatos();
+
+  await docRef.set(nuevoUsuario);
 
   usuarioActivo = nuevoUsuario;
   localStorage.setItem('guardia_user_obj', JSON.stringify(usuarioActivo));
-  alert("Registro completado con éxito.");
+  alert("Registro guardado en la nube con éxito.");
   mostrarRegistro(false);
   verificarSesion();
+  activarNotificacionesPush();
 }
 
-function iniciarSesion() {
+async function iniciarSesion() {
   const u = document.getElementById('login-user').value.trim();
   const p = document.getElementById('login-pass').value.trim();
 
-  const encontrado = usuarios.find(x => x.user.toLowerCase() === u.toLowerCase() && x.pass === p);
-  if (!encontrado) {
+  if (!u || !p) {
+    alert("Ingresa tu usuario y contraseña.");
+    return;
+  }
+
+  const docSnap = await db.collection('usuarios').doc(u.toLowerCase()).get();
+  if (!docSnap.exists || docSnap.data().pass !== p) {
     alert("Usuario o contraseña no válidos.");
     return;
   }
 
-  usuarioActivo = encontrado;
+  usuarioActivo = docSnap.data();
   localStorage.setItem('guardia_user_obj', JSON.stringify(usuarioActivo));
   verificarSesion();
 }
@@ -341,7 +449,7 @@ function cargarFormularioEditarPerfil() {
   });
 }
 
-function guardarCambiosPerfil() {
+async function guardarCambiosPerfil() {
   const nombre = document.getElementById('edit-nombre').value.trim();
   const whatsapp = document.getElementById('edit-whatsapp').value.trim();
   const zona = document.getElementById('edit-zona').value.trim();
@@ -356,7 +464,6 @@ function guardarCambiosPerfil() {
     return;
   }
 
-  const nombreAnterior = usuarioActivo.nombre;
   usuarioActivo.nombre = nombre;
   usuarioActivo.whatsapp = whatsapp;
   usuarioActivo.zona = zona;
@@ -367,24 +474,10 @@ function guardarCambiosPerfil() {
   usuarioActivo.honorarioNocturno = hn;
   if (fotoTempEdit) usuarioActivo.foto = fotoTempEdit;
 
-  const idx = usuarios.findIndex(u => u.user === usuarioActivo.user);
-  if (idx !== -1) usuarios[idx] = usuarioActivo;
-
-  guardias.forEach(g => {
-    if (g.solicitante === nombreAnterior || g.solicitanteUser === usuarioActivo.user) {
-      g.solicitante = nombre;
-      g.zona = zona;
-      g.institucion = institucion;
-      if (!g.honorario) g.honorario = g.turno === 'Diurno' ? hd : hn;
-    }
-    if (g.asignadoA === nombreAnterior || g.asignadoUser === usuarioActivo.user) {
-      g.asignadoA = nombre;
-    }
-  });
+  await db.collection('usuarios').doc(usuarioActivo.user.toLowerCase()).set(usuarioActivo, { merge: true });
 
   localStorage.setItem('guardia_user_obj', JSON.stringify(usuarioActivo));
-  guardarDatos();
-  alert("¡Perfil actualizado correctamente!");
+  alert("¡Perfil actualizado en la nube!");
   verificarSesion();
 }
 
@@ -445,10 +538,10 @@ function renderAlertas() {
 
   const guardiasUnidad = guardias.filter(perteneceAMiUnidad);
   const misConPostulantes = guardiasUnidad.filter(
-    g => g.solicitante.toLowerCase() === usuarioActivo.nombre.toLowerCase() && g.estado === 'Pendiente' && g.postulantes.length > 0
+    g => g.solicitanteUser === usuarioActivo.user && g.estado === 'Pendiente' && g.postulantes.length > 0
   );
   const disponibles = guardiasUnidad.filter(
-    g => g.solicitante.toLowerCase() !== usuarioActivo.nombre.toLowerCase() && g.estado === 'Pendiente'
+    g => g.solicitanteUser !== usuarioActivo.user && g.estado === 'Pendiente'
   );
 
   let html = '';
@@ -516,12 +609,12 @@ function renderSolicitudes() {
   }
 
   if (guardiasUnidad.length === 0) {
-    cont.innerHTML = `<div class="card"><p style="font-size: 12px; color: var(--text-muted); text-align: center;">No hay solicitudes registradas para este filtro.</p></div>`;
+    cont.innerHTML = `<div class="card"><p style="font-size: 12px; color: var(--text-muted); text-align: center;">No hay solicitudes registradas en tu unidad todavía.</p></div>`;
     return;
   }
 
   guardiasUnidad.forEach(g => {
-    const esMia = g.solicitante.toLowerCase() === usuarioActivo.nombre.toLowerCase();
+    const esMia = g.solicitanteUser === usuarioActivo.user;
     const reglas = calcularReglasTabulador(g.fecha, g.turno);
     const yaMePostule = g.postulantes.some(p => p.user === usuarioActivo.user);
 
@@ -585,7 +678,7 @@ function renderSolicitudes() {
       }
     }
 
-    const objSolicitante = usuarios.find(u => u.nombre.toLowerCase() === g.solicitante.toLowerCase());
+    const objSolicitante = usuarios.find(u => u.user === g.solicitanteUser);
     let waBtn = '';
     if (!esMia && objSolicitante && objSolicitante.whatsapp && g.estado !== 'Cancelada') {
       const msg = `Hola ${g.solicitante}, te contacto por la guardia en ${g.servicio} (${g.fecha}, turno ${g.turno}).`;
@@ -626,7 +719,7 @@ function renderSolicitudes() {
   });
 }
 
-function incrementarOfertaGuardia(idGuardia) {
+async function incrementarOfertaGuardia(idGuardia) {
   const g = guardias.find(x => x.id === idGuardia);
   if (!g) return;
 
@@ -652,19 +745,18 @@ function incrementarOfertaGuardia(idGuardia) {
     return;
   }
 
-  g.honorario = nuevoMonto;
-  g.montoPactado = nuevoMonto;
-  guardarDatos();
-  renderSolicitudes();
-  renderBitacora();
-  alert(`¡Oferta actualizada a $${nuevoMonto} MXN para atraer relevos!`);
+  await db.collection('guardias').doc(String(idGuardia)).update({
+    honorario: nuevoMonto,
+    montoPactado: nuevoMonto
+  });
+  alert(`¡Oferta actualizada a $${nuevoMonto} MXN!`);
 }
 
-function postularme(idGuardia) {
+async function postularme(idGuardia) {
   const g = guardias.find(x => x.id === idGuardia);
   if (!g) return;
 
-  if (g.solicitante.toLowerCase() === usuarioActivo.nombre.toLowerCase()) {
+  if (g.solicitanteUser === usuarioActivo.user) {
     alert("No puedes postularte a una guardia que tú mismo solicitaste.");
     return;
   }
@@ -698,31 +790,31 @@ function postularme(idGuardia) {
     return;
   }
 
-  g.postulantes.push({
+  const nuevosPostulantes = [...g.postulantes, {
     user: usuarioActivo.user,
     nombre: usuarioActivo.nombre,
     perfil: usuarioActivo.perfil,
     whatsapp: usuarioActivo.whatsapp,
     montoPropuesto: montoPropuesto,
     fechaPostulacion: Date.now()
-  });
+  }];
 
-  guardarDatos();
-  renderAlertas();
-  renderSolicitudes();
-  alert(`¡Te has postulado por $${montoPropuesto} MXN! ${g.solicitante} podrá elegirte entre los candidatos.`);
+  await db.collection('guardias').doc(String(idGuardia)).update({
+    postulantes: nuevosPostulantes
+  });
+  alert(`¡Te has postulado por $${montoPropuesto} MXN!`);
 }
 
-function retirarPostulacion(idGuardia) {
+async function retirarPostulacion(idGuardia) {
   const g = guardias.find(x => x.id === idGuardia);
   if (!g) return;
-  g.postulantes = g.postulantes.filter(p => p.user !== usuarioActivo.user);
-  guardarDatos();
-  renderAlertas();
-  renderSolicitudes();
+  const filtrados = g.postulantes.filter(p => p.user !== usuarioActivo.user);
+  await db.collection('guardias').doc(String(idGuardia)).update({
+    postulantes: filtrados
+  });
 }
 
-function elegirPostulante(idGuardia, indexPostulante) {
+async function elegirPostulante(idGuardia, indexPostulante) {
   const g = guardias.find(x => x.id === idGuardia);
   if (!g || !g.postulantes[indexPostulante]) return;
 
@@ -734,34 +826,27 @@ function elegirPostulante(idGuardia, indexPostulante) {
   }
 
   if (confirm(`¿Confirmas elegir a ${elegido.nombre} para cubrir tu guardia del ${g.fecha} por $${elegido.montoPropuesto} MXN?`)) {
-    g.asignadoA = elegido.nombre;
-    g.asignadoUser = elegido.user;
-    g.montoPactado = elegido.montoPropuesto;
-    g.estado = 'Asignada';
-
-    guardarDatos();
-    renderAlertas();
-    renderSolicitudes();
-    renderBitacora();
-    renderCalendario();
+    await db.collection('guardias').doc(String(idGuardia)).update({
+      asignadoA: elegido.nombre,
+      asignadoUser: elegido.user,
+      montoPactado: elegido.montoPropuesto,
+      estado: 'Asignada'
+    });
     alert(`¡Guardia asignada a ${elegido.nombre} por $${elegido.montoPropuesto} MXN!`);
   }
 }
 
-function cancelarSolicitud(idGuardia) {
+async function cancelarSolicitud(idGuardia) {
   const g = guardias.find(x => x.id === idGuardia);
   if (!g) return;
 
   if (confirm(`¿Estás seguro de cancelar tu solicitud del ${g.fecha} en ${g.servicio}?`)) {
-    g.estado = 'Cancelada';
-    g.asignadoA = null;
-    g.asignadoUser = null;
-    g.postulantes = [];
-    guardarDatos();
-    renderAlertas();
-    renderSolicitudes();
-    renderBitacora();
-    renderCalendario();
+    await db.collection('guardias').doc(String(idGuardia)).update({
+      estado: 'Cancelada',
+      asignadoA: null,
+      asignadoUser: null,
+      postulantes: []
+    });
     alert("La solicitud ha sido cancelada.");
   }
 }
@@ -790,7 +875,7 @@ function actualizarInfoTabuladorModal() {
   `;
 }
 
-function guardarNuevaSolicitud() {
+async function guardarNuevaSolicitud() {
   const fecha = document.getElementById('sol-fecha').value;
   const turno = document.getElementById('sol-turno').value;
   const servicio = document.getElementById('sol-servicio').value;
@@ -813,9 +898,10 @@ function guardarNuevaSolicitud() {
     return;
   }
 
-  guardias.unshift({
-    id: Date.now(),
-    creadaEn: Date.now(),
+  const nuevoId = Date.now();
+  const nuevaGuardia = {
+    id: nuevoId,
+    creadaEn: nuevoId,
     solicitante: usuarioActivo.nombre,
     solicitanteUser: usuarioActivo.user,
     zona: usuarioActivo.zona,
@@ -829,16 +915,15 @@ function guardarNuevaSolicitud() {
     asignadoUser: null,
     honorario: honorario,
     montoPactado: honorario
-  });
+  };
 
   cerrarModalSolicitud();
-  guardarDatos();
-  renderAlertas();
-  renderSolicitudes();
-  renderBitacora();
-  renderCalendario();
+  await db.collection('guardias').doc(String(nuevoId)).set(nuevaGuardia);
 }
 
+// =========================================================================
+// TAB 2: BITÁCORA Y EFECTIVIDAD
+// =========================================================================
 function renderTablaEfectividad() {
   const cont = document.getElementById('tabla-efectividad-container');
   const guardiasUnidad = guardias.filter(perteneceAMiUnidad);
@@ -892,7 +977,7 @@ function renderTablaEfectividad() {
   `;
 }
 
-function editarMontoPactado(idGuardia) {
+async function editarMontoPactado(idGuardia) {
   const g = guardias.find(x => x.id === idGuardia);
   if (!g) return;
   const reglas = calcularReglasTabulador(g.fecha, g.turno);
@@ -906,10 +991,9 @@ function editarMontoPactado(idGuardia) {
       alert(`No puede superar el tope permitido de $${reglas.montoMaximo} MXN.`);
       return;
     }
-    g.montoPactado = val;
-    guardarDatos();
-    renderSolicitudes();
-    renderBitacora();
+    await db.collection('guardias').doc(String(idGuardia)).update({
+      montoPactado: val
+    });
   }
 }
 
@@ -923,7 +1007,7 @@ function renderBitacora() {
   let totalIngresos = 0;
   let totalEgresos = 0;
 
-  const misPedidos = guardias.filter(g => g.solicitante.toLowerCase() === usuarioActivo.nombre.toLowerCase());
+  const misPedidos = guardias.filter(g => g.solicitanteUser === usuarioActivo.user);
   if (misPedidos.length === 0) {
     contPedidos.innerHTML = '<p style="font-size: 12px; color: var(--text-muted);">No has solicitado coberturas.</p>';
   } else {
@@ -953,7 +1037,7 @@ function renderBitacora() {
     }).join('');
   }
 
-  const misCoberturas = guardias.filter(g => g.asignadoA && g.asignadoA.toLowerCase() === usuarioActivo.nombre.toLowerCase() && g.estado !== 'Cancelada');
+  const misCoberturas = guardias.filter(g => g.asignadoUser === usuarioActivo.user && g.estado !== 'Cancelada');
   if (misCoberturas.length === 0) {
     contCoberturas.innerHTML = '<p style="font-size: 12px; color: var(--text-muted);">No tienes guardias agendadas para cubrir.</p>';
   } else {
@@ -978,7 +1062,7 @@ function renderBitacora() {
   document.getElementById('total-ingresos').innerText = `$${totalIngresos.toLocaleString('es-MX')}`;
   document.getElementById('total-egresos').innerText = `$${totalEgresos.toLocaleString('es-MX')}`;
 
-  const misInsumos = insumos.filter(i => i.usuario.toLowerCase() === usuarioActivo.nombre.toLowerCase());
+  const misInsumos = insumos.filter(i => i.usuarioUser === usuarioActivo.user);
   if (misInsumos.length === 0) {
     contInsumos.innerHTML = '<p style="font-size: 12px; color: var(--text-muted);">Sin registros de insumos aún.</p>';
   } else {
@@ -991,40 +1075,36 @@ function renderBitacora() {
   }
 }
 
-function marcarRealizada(idGuardia) {
-  const g = guardias.find(x => x.id === idGuardia);
-  if (g) {
-    g.estado = 'Realizada';
-    guardarDatos();
-    renderSolicitudes();
-    renderBitacora();
-    renderCalendario();
-  }
+async function marcarRealizada(idGuardia) {
+  await db.collection('guardias').doc(String(idGuardia)).update({
+    estado: 'Realizada'
+  });
 }
 
-function agregarInsumo() {
+async function agregarInsumo() {
   const descripcion = prompt("Descripción del insumo o entrega:");
   if (!descripcion) return;
   const servicio = prompt("Servicio o área del insumo:", "Hospitalización");
   if (!servicio) return;
 
-  insumos.push({
-    id: Date.now(),
+  const nuevoId = Date.now();
+  await db.collection('insumos').doc(String(nuevoId)).set({
+    id: nuevoId,
     usuario: usuarioActivo.nombre,
+    usuarioUser: usuarioActivo.user,
     fecha: new Date().toISOString().split('T')[0],
     servicio: servicio,
     descripcion: descripcion
   });
-  guardarDatos();
-  renderBitacora();
 }
 
-function eliminarInsumo(idInsumo) {
-  insumos = insumos.filter(i => i.id !== idInsumo);
-  guardarDatos();
-  renderBitacora();
+async function eliminarInsumo(idInsumo) {
+  await db.collection('insumos').doc(String(idInsumo)).delete();
 }
 
+// =========================================================================
+// TAB 3 Y TAB 4: CALENDARIO Y PADRÓN
+// =========================================================================
 function renderCalendario() {
   const calBody = document.getElementById('cal-body');
   calBody.innerHTML = '';
@@ -1134,12 +1214,6 @@ setInterval(() => {
   }
 }, 60000);
 
-// REGISTRO DEL SERVICE WORKER PARA APP INSTALABLE (PWA)
-if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register('./sw.js').catch(err => console.log('SW:', err));
-  });
-}
-
 inicializarSelectoresAreas();
+iniciarSincronizacionNube();
 verificarSesion();
