@@ -1,7 +1,7 @@
 importScripts('https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js');
 importScripts('https://www.gstatic.com/firebasejs/10.12.2/firebase-messaging-compat.js');
 
-const CACHE_NAME = 'guardias-pwa-v9';
+const CACHE_NAME = 'guardias-pwa-v10';
 const ASSETS = [
   './',
   './index.html',
