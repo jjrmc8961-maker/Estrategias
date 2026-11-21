@@ -30,6 +30,71 @@ if ('serviceWorker' in navigator) {
 }
 
 // =========================================================================
+// CONFIGURACIÓN ONESIGNAL PUSH EN SEGUNDO PLANO (SEGURA DESDE FIRESTORE)
+// =========================================================================
+const ONESIGNAL_APP_ID = "952b86f7-a6b9-4649-9c60-f24744ac4027";
+let ONESIGNAL_REST_KEY = "";
+
+async function cargarLlaveNotificaciones() {
+  try {
+    const doc = await db.collection('config').doc('onesignal').get();
+    if (doc.exists && doc.data().restKey) {
+      ONESIGNAL_REST_KEY = doc.data().restKey.trim();
+    }
+  } catch (e) {
+    console.warn("Config push:", e);
+  }
+}
+
+function obtenerTagUnidadUsuario(usuario) {
+  const inst = normalizarInstitucion(usuario.institucion || "");
+  const zona = normalizarZona(usuario.zona || "");
+  return (inst + "_" + zona).replace(/\s+/g, "_");
+}
+
+function registrarDispositivoOneSignal(usuario) {
+  if (!usuario || !window.OneSignalDeferred) return;
+  const unidadTag = obtenerTagUnidadUsuario(usuario);
+  window.OneSignalDeferred.push(async function(OneSignal) {
+    try {
+      await OneSignal.login(String(usuario.user));
+      await OneSignal.User.addTags({
+        unidad: unidadTag,
+        perfil: usuario.perfil || "Enfermeria"
+      });
+    } catch (e) {
+      console.warn("OneSignal tag:", e);
+    }
+  });
+}
+
+async function enviarPushSegundoPlano({ titulo, mensaje, filtroTags, urlDestino }) {
+  if (!ONESIGNAL_REST_KEY) {
+    await cargarLlaveNotificaciones();
+  }
+  if (!ONESIGNAL_REST_KEY) return;
+
+  try {
+    await fetch("https://api.onesignal.com/notifications", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json; charset=utf-8",
+        "Authorization": "Key " + ONESIGNAL_REST_KEY
+      },
+      body: JSON.stringify({
+        app_id: ONESIGNAL_APP_ID,
+        headings: { en: titulo, es: titulo },
+        contents: { en: mensaje, es: mensaje },
+        filters: filtroTags,
+        url: urlDestino || "https://jjrmc8961-maker.github.io/Estrategias/"
+      })
+    });
+  } catch (err) {
+    console.warn("Error enviando push OneSignal:", err);
+  }
+}
+
+// =========================================================================
 // CATÁLOGO DINÁMICO DESPLEGABLE Y NORMALIZACIÓN DE INSTITUCIONES
 // =========================================================================
 const ALIAS_INSTITUCIONES = [
@@ -183,7 +248,6 @@ const CONFIG_TURNOS = {
   "Vespertino": { inicio: "14:00", fin: "21:30", base: 650, categoria: "sencillo" },
   "Nocturno": { inicio: "21:00", fin: "07:30", base: 1300, categoria: "largo" },
   "Jornada Acumulada": { inicio: "07:00", fin: "19:00", base: 1300, categoria: "largo" },
-  // Compatibilidad con registros anteriores
   "Diurno": { inicio: "07:00", fin: "19:00", base: 650, categoria: "sencillo" }
 };
 
@@ -294,34 +358,22 @@ function mostrarNotificacionLocal(titulo, cuerpo) {
 }
 
 async function activarNotificacionesPush() {
-  if (!('Notification' in window)) {
-    alert("Este navegador no soporta notificaciones.");
+  if (!window.OneSignalDeferred) {
+    alert("Cargando servicio de notificaciones, intenta de nuevo en 3 segundos.");
     return;
   }
-  const permiso = await Notification.requestPermission();
-  if (permiso !== 'granted') {
-    alert("Permiso de notificaciones denegado. Actívalo en los ajustes de tu navegador.");
-    return;
-  }
-
-  try {
-    if (messaging && swRegistration) {
-      const token = await messaging.getToken({
-        vapidKey: VAPID_KEY,
-        serviceWorkerRegistration: swRegistration
-      });
-      if (token && usuarioActivo) {
-        usuarioActivo.fcmToken = token;
-        await db.collection('usuarios').doc(usuarioActivo.user.toLowerCase()).set(usuarioActivo, { merge: true });
-        localStorage.setItem('guardia_user_obj', JSON.stringify(usuarioActivo));
+  window.OneSignalDeferred.push(async function(OneSignal) {
+    try {
+      await OneSignal.Notifications.requestPermission();
+      if (usuarioActivo) {
+        registrarDispositivoOneSignal(usuarioActivo);
       }
+      alert("🔔 ¡Notificaciones en segundo plano activadas en este dispositivo!");
+    } catch (e) {
+      console.error("Error activando notificaciones:", e);
+      alert("Asegúrate de permitir las notificaciones en los ajustes de tu navegador.");
     }
-    mostrarNotificacionLocal("✅ Notificaciones Activadas", "Recibirás alertas cuando publiquen guardias en tu unidad.");
-    alert("¡Notificaciones activadas correctamente en este dispositivo!");
-  } catch (err) {
-    console.error("Error obteniendo token:", err);
-    alert("Notificaciones locales activadas.");
-  }
+  });
 }
 
 // =========================================================================
@@ -708,6 +760,9 @@ function verificarSesion() {
     document.getElementById('unit-display').innerText = `${instTxt} • ${zonaTxt}`;
     document.getElementById('lbl-unidad-activa').innerText = `${instTxt} (${zonaTxt})`;
     
+    cargarLlaveNotificaciones();
+    registrarDispositivoOneSignal(usuarioActivo);
+
     cargarFormularioEditarPerfil();
     renderAlertas();
     renderSolicitudes();
@@ -781,8 +836,8 @@ function puedeCubrir(nombrePersona, fechaGuardia, tipoTurno) {
   const anio = d.getFullYear();
   const esPrimeraQuincena = d.getDate() <= 15;
 
-  let sencillos = 0; // Matutino / Vespertino / Diurno
-  let largos = 0;    // Nocturno / Jornada Acumulada
+  let sencillos = 0;
+  let largos = 0;
 
   guardias.forEach(g => {
     if (g.asignadoA === nombrePersona && (g.estado === 'Asignada' || g.estado === 'Realizada')) {
@@ -1048,6 +1103,15 @@ async function elegirPostulante(idGuardia, indexPostulante) {
       montoPactado: elegido.montoPropuesto,
       estado: 'Asignada'
     });
+
+    enviarPushSegundoPlano({
+      titulo: `✅ ¡Guardia Confirmada!`,
+      mensaje: `${usuarioActivo.nombre} confirmó tu cobertura en ${g.servicio} (${g.fecha}) por $${elegido.montoPropuesto} MXN.`,
+      filtroTags: [
+        { field: "tag", key: "unidad", relation: "=", value: obtenerTagUnidadUsuario(usuarioActivo) }
+      ]
+    });
+
     alert(`¡Guardia asignada a ${elegido.nombre} por $${elegido.montoPropuesto} MXN!`);
   }
 }
@@ -1126,13 +1190,16 @@ async function guardarNuevaSolicitud() {
   }
 
   const nuevoId = Date.now();
+  const instNorm = normalizarInstitucion(usuarioActivo.institucion);
+  const zonaNorm = normalizarZona(usuarioActivo.zona);
+
   const nuevaGuardia = {
     id: nuevoId,
     creadaEn: nuevoId,
     solicitante: usuarioActivo.nombre,
     solicitanteUser: usuarioActivo.user,
-    zona: normalizarZona(usuarioActivo.zona),
-    institucion: normalizarInstitucion(usuarioActivo.institucion),
+    zona: zonaNorm,
+    institucion: instNorm,
     fecha: fecha,
     turno: turno,
     horaInicio: horaInicio,
@@ -1148,6 +1215,14 @@ async function guardarNuevaSolicitud() {
 
   cerrarModalSolicitud();
   await db.collection('guardias').doc(String(nuevoId)).set(nuevaGuardia);
+
+  enviarPushSegundoPlano({
+    titulo: `🚨 Nueva Guardia en ${instNorm}`,
+    mensaje: `${servicio} • ${turno} (${horaInicio} - ${horaFin}) • $${honorario} MXN`,
+    filtroTags: [
+      { field: "tag", key: "unidad", relation: "=", value: obtenerTagUnidadUsuario(usuarioActivo) }
+    ]
+  });
 }
 
 // =========================================================================
