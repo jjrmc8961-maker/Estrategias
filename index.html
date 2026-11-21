@@ -353,12 +353,14 @@
   <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-messaging-compat.js"></script>
-    <script src="https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js" defer></script>
+  <script src="https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js" defer></script>
   <script>
     window.OneSignalDeferred = window.OneSignalDeferred || [];
     OneSignalDeferred.push(async function(OneSignal) {
       await OneSignal.init({
         appId: "952b86f7-a6b9-4649-9c60-f24744ac4027",
+        serviceWorkerParam: { scope: "/Estrategias/" },
+        serviceWorkerPath: "Estrategias/OneSignalSDKWorker.js",
         notifyButton: { enable: false }
       });
     });
