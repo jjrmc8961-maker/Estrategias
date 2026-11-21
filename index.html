@@ -118,11 +118,11 @@
 
       <div style="display: flex; gap: 8px;">
         <div style="flex: 1;">
-          <label>Tarifa Diurna Base ($)</label>
+          <label>Tarifa Turno Sencillo ($)</label>
           <input type="number" id="reg-tarifa-d" value="650">
         </div>
         <div style="flex: 1;">
-          <label>Tarifa Nocturna Base ($)</label>
+          <label>Tarifa Nocturno / Acum. ($)</label>
           <input type="number" id="reg-tarifa-n" value="1300">
         </div>
       </div>
@@ -141,10 +141,23 @@
       <input type="date" id="sol-fecha" onchange="actualizarInfoTabuladorModal()">
 
       <label>Turno *</label>
-      <select id="sol-turno" onchange="actualizarInfoTabuladorModal()">
-        <option value="Diurno">Diurno (07:00 - 19:00)</option>
-        <option value="Nocturno">Nocturno (19:00 - 07:00)</option>
+      <select id="sol-turno" onchange="alCambiarTurnoModal()">
+        <option value="Matutino">Matutino</option>
+        <option value="Vespertino">Vespertino</option>
+        <option value="Nocturno">Nocturno</option>
+        <option value="Jornada Acumulada">Jornada Acumulada</option>
       </select>
+
+      <div style="display: flex; gap: 8px;">
+        <div style="flex: 1;">
+          <label>Hora de Entrada *</label>
+          <input type="time" id="sol-hora-inicio" value="07:00" onchange="actualizarInfoTabuladorModal()">
+        </div>
+        <div style="flex: 1;">
+          <label>Hora de Salida *</label>
+          <input type="time" id="sol-hora-fin" value="14:30">
+        </div>
+      </div>
 
       <label>Área o Servicio Clínico *</label>
       <select id="sol-servicio"></select>
@@ -171,7 +184,7 @@
       <div class="rule-box">
         <strong>Unidad activa: <span id="lbl-unidad-activa"></span></strong><br>
         <strong>Topes anti-inflación:</strong> +48h (hasta +15%) • 24-48h (hasta +25%) • -24h Urgente (hasta +35%).<br>
-        <strong>Límite quincenal:</strong> Máx. 3 diurnas, 2 nocturnas, o 1 diurna y 1 nocturna.
+        <strong>Límite quincenal:</strong> Máx. 3 turnos (Mat/Vesp), 2 (Noct/Acum), o 1 y 1.
       </div>
 
       <button class="btn" onclick="abrirModalSolicitud()" style="margin-bottom: 12px;">+ Solicitar Cobertura en mi Unidad</button>
@@ -300,11 +313,11 @@
 
         <div style="display: flex; gap: 8px;">
           <div style="flex: 1;">
-            <label>Tarifa Diurna Base ($)</label>
+            <label>Tarifa Turno Sencillo ($)</label>
             <input type="number" id="edit-tarifa-d">
           </div>
           <div style="flex: 1;">
-            <label>Tarifa Nocturna Base ($)</label>
+            <label>Tarifa Nocturno / Acum. ($)</label>
             <input type="number" id="edit-tarifa-n">
           </div>
         </div>
