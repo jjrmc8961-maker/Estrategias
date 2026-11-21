@@ -26,7 +26,7 @@
   <div id="view-login" class="container" style="margin-top: 20px;">
     <div class="card">
       <h2 style="font-size: 18px; margin-bottom: 6px; text-align: center;">Acceso al Sistema</h2>
-      <p style="font-size: 12px; color: var(--text-muted); text-align: center; margin-bottom: 14px;">Plataforma Multi-Institucional de Relevos</p>
+      <p style="font-size: 12px; color: var(--text-muted); text-align: center; margin-bottom: 14px;">Plataforma Multi-Institucional en la Nube</p>
       
       <label>Usuario o Matrícula</label>
       <input type="text" id="login-user" placeholder="Ej. 8565853">
@@ -162,7 +162,6 @@
   <!-- PANTALLA PRINCIPAL (APP) -->
   <div id="view-app" class="container" style="display: none;">
 
-    <!-- BANNER DE ALERTAS EN TIEMPO REAL -->
     <div id="contenedor-alertas"></div>
 
     <!-- TAB 1: GUARDIAS COMUNITARIAS DE LA UNIDAD -->
@@ -175,7 +174,6 @@
 
       <button class="btn" onclick="abrirModalSolicitud()" style="margin-bottom: 12px;">+ Solicitar Cobertura en mi Unidad</button>
 
-      <!-- FILTRO DESPLEGABLE POR ÁREA -->
       <div style="display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 8px;">
         <h4 style="font-size: 14px; white-space: nowrap;">Tablero de Guardias</h4>
         <select id="filtro-area-tablero" onchange="renderSolicitudes()" style="margin: 0; padding: 5px 8px; font-size: 12px; max-width: 190px;">
@@ -191,13 +189,11 @@
       <h3 style="font-size: 16px; margin-bottom: 4px;">Bitácora, Efectividad y Finanzas</h3>
       <p style="font-size: 12px; color: var(--text-muted); margin-bottom: 12px;">Estadísticas de cobertura, libro contable e insumos.</p>
 
-      <!-- TABLA GENERAL DE EFECTIVIDAD -->
       <div class="card" style="border-top: 3px solid #6366f1;">
         <h4 style="font-size: 13px; margin-bottom: 4px;">📊 Tabla General de Efectividad (Tu Unidad)</h4>
         <div id="tabla-efectividad-container"></div>
       </div>
 
-      <!-- RESUMEN CONTABLE -->
       <div class="finance-grid">
         <div class="finance-box" style="border-top: 3px solid var(--success);">
           <span style="font-size: 11px; color: var(--text-muted);">Por Cobrar / Ganado</span>
@@ -310,6 +306,7 @@
         </div>
 
         <button class="btn btn-success" onclick="guardarCambiosPerfil()">💾 Guardar Cambios del Perfil</button>
+        <button class="btn btn-secondary" onclick="activarNotificacionesPush()" style="margin-top: 8px;">🔔 Activar Notificaciones en este Celular</button>
       </div>
     </div>
 
@@ -324,6 +321,10 @@
     <button class="tab-btn" onclick="cambiarTab('perfil')">Mi Perfil</button>
   </div>
 
+  <!-- SDK DE FIREBASE (COMPAT) -->
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-messaging-compat.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
