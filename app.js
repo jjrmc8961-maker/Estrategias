@@ -30,6 +30,142 @@ if ('serviceWorker' in navigator) {
 }
 
 // =========================================================================
+// CATÁLOGO DINÁMICO DESPLEGABLE Y NORMALIZACIÓN DE INSTITUCIONES
+// =========================================================================
+const ALIAS_INSTITUCIONES = [
+  { canonico: "CECAN", patrones: ["cecan", "secan", "centro estatal de cancerologia", "cancerologia", "instituto estatal de cancerologia"] },
+  { canonico: "CAE", patrones: ["cae", "centro de alta especialidad", "dr rafael lucio", "rafael lucio"] },
+  { canonico: "IMSS HGZ 11", patrones: ["imss hgz 11", "hgz 11", "hg 11", "imss 11", "hospital general de zona 11"] },
+  { canonico: "ISSSTE Xalapa", patrones: ["issste", "clinica hospital issste", "hospital issste"] },
+  { canonico: "Hospital Regional Dr. Luis F. Nachón", patrones: ["nachon", "luis f nachon", "hospital civil", "hospital regional"] },
+  { canonico: "CEMEV", patrones: ["cemev", "centro de especialidades medicas"] }
+];
+
+let listaZonasNube = ["Xalapa", "Veracruz", "Coatepec", "Boca del Río", "Córdoba", "Orizaba"];
+let listaInstitucionesNube = ["CECAN"];
+
+function limpiarTextoBase(texto) {
+  return (texto || '')
+    .toString()
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[.,\-_/()]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function normalizarInstitucion(texto) {
+  const limpio = limpiarTextoBase(texto);
+  if (!limpio) return "";
+
+  for (const grupo of ALIAS_INSTITUCIONES) {
+    for (const patron of grupo.patrones) {
+      if (limpio === patron || limpio.includes(patron)) {
+        return grupo.canonico;
+      }
+    }
+  }
+
+  // Revisar si ya existe en el catálogo dinámico de la nube
+  const existente = listaInstitucionesNube.find(inst => limpiarTextoBase(inst) === limpio);
+  if (existente) return existente;
+
+  return (texto || '').trim().replace(/\s+/g, " ");
+}
+
+function claveInstitucion(texto) {
+  return limpiarTextoBase(normalizarInstitucion(texto));
+}
+
+function normalizarZona(texto) {
+  const limpio = limpiarTextoBase(texto);
+  if (!limpio) return "";
+  if (limpio.includes("xalapa") || limpio.includes("jalapa")) return "Xalapa";
+  if (limpio.includes("veracruz") || limpio.includes("puerto")) return "Veracruz";
+  if (limpio.includes("coatepec")) return "Coatepec";
+  if (limpio.includes("boca del rio")) return "Boca del Río";
+  if (limpio.includes("cordoba")) return "Córdoba";
+  if (limpio.includes("orizaba")) return "Orizaba";
+  if (limpio.includes("poza rica")) return "Poza Rica";
+  if (limpio.includes("coatzacoalcos")) return "Coatzacoalcos";
+
+  const existente = listaZonasNube.find(z => limpiarTextoBase(z) === limpio);
+  if (existente) return existente;
+
+  return (texto || '').trim().replace(/\s+/g, " ");
+}
+
+function claveZona(texto) {
+  return limpiarTextoBase(normalizarZona(texto));
+}
+
+function poblarDesplegablesUnidades() {
+  const zonasOrdenadas = Array.from(new Set(listaZonasNube)).sort((a, b) => a.localeCompare(b));
+  const instOrdenadas = Array.from(new Set(listaInstitucionesNube)).sort((a, b) => a.localeCompare(b));
+
+  const opcionesZona = zonasOrdenadas.map(z => `<option value="${z}">${z}</option>`).join('') +
+    `<option value="__NUEVA__">+ Agregar otra ciudad...</option>`;
+
+  const opcionesInst = instOrdenadas.map(i => `<option value="${i}">${i}</option>`).join('') +
+    `<option value="__NUEVA__">+ Agregar nueva institución...</option>`;
+
+  ['reg-zona-select', 'edit-zona-select'].forEach(id => {
+    const sel = document.getElementById(id);
+    if (!sel) return;
+    const prev = sel.value;
+    sel.innerHTML = opcionesZona;
+    if (prev && zonasOrdenadas.includes(prev)) sel.value = prev;
+  });
+
+  ['reg-inst-select', 'edit-inst-select'].forEach(id => {
+    const sel = document.getElementById(id);
+    if (!sel) return;
+    const prev = sel.value;
+    sel.innerHTML = opcionesInst;
+    if (prev && instOrdenadas.includes(prev)) sel.value = prev;
+  });
+}
+
+function verificarOpcionNueva(prefijo, tipo) {
+  const selectEl = document.getElementById(`${prefijo}-${tipo}-select`);
+  const inputEl = document.getElementById(`${prefijo}-${tipo}-nueva`);
+  if (!selectEl || !inputEl) return;
+
+  if (selectEl.value === '__NUEVA__') {
+    inputEl.style.display = 'block';
+    inputEl.focus();
+  } else {
+    inputEl.style.display = 'none';
+    inputEl.value = '';
+  }
+}
+
+function obtenerValorDesplegable(prefijo, tipo) {
+  const selectEl = document.getElementById(`${prefijo}-${tipo}-select`);
+  const inputEl = document.getElementById(`${prefijo}-${tipo}-nueva`);
+  if (!selectEl) return '';
+  if (selectEl.value === '__NUEVA__') {
+    return inputEl ? inputEl.value.trim() : '';
+  }
+  return selectEl.value;
+}
+
+async function registrarUnidadEnCatalogoNube(zonaNormalizada, instNormalizada) {
+  if (zonaNormalizada && !listaZonasNube.some(z => claveZona(z) === claveZona(zonaNormalizada))) {
+    listaZonasNube.push(zonaNormalizada);
+  }
+  if (instNormalizada && !listaInstitucionesNube.some(i => claveInstitucion(i) === claveInstitucion(instNormalizada))) {
+    listaInstitucionesNube.push(instNormalizada);
+  }
+  await db.collection('configuracion').doc('catalogo_unidades').set({
+    zonas: listaZonasNube,
+    instituciones: listaInstitucionesNube
+  }, { merge: true });
+}
+
+// =========================================================================
 // CATÁLOGO Y VARIABLES EN MEMORIA SINCRONIZADA
 // =========================================================================
 const AREAS_CLINICAS = [
@@ -63,9 +199,36 @@ let usuarioActivo = JSON.parse(localStorage.getItem('guardia_user_obj')) || null
 // ESCUCHA EN TIEMPO REAL CON FIRESTORE
 // =========================================================================
 function iniciarSincronizacionNube() {
-  // 1. Escuchar Usuarios en tiempo real
+  // 0. Escuchar Catálogo Desplegable de Zonas e Instituciones
+  db.collection('configuracion').doc('catalogo_unidades').onSnapshot(doc => {
+    if (doc.exists) {
+      const data = doc.data();
+      if (Array.isArray(data.zonas) && data.zonas.length > 0) {
+        listaZonasNube = Array.from(new Set([...listaZonasNube, ...data.zonas]));
+      }
+      if (Array.isArray(data.instituciones) && data.instituciones.length > 0) {
+        listaInstitucionesNube = Array.from(new Set([...listaInstitucionesNube, ...data.instituciones]));
+      }
+    }
+    poblarDesplegablesUnidades();
+    if (usuarioActivo) cargarFormularioEditarPerfil();
+  });
+
+  // 1. Escuchar Usuarios y aprender sus unidades si aún no estaban en el catálogo
   db.collection('usuarios').onSnapshot(snapshot => {
     usuarios = snapshot.docs.map(doc => doc.data());
+    usuarios.forEach(u => {
+      if (u.zona) {
+        const z = normalizarZona(u.zona);
+        if (!listaZonasNube.some(item => claveZona(item) === claveZona(z))) listaZonasNube.push(z);
+      }
+      if (u.institucion) {
+        const inst = normalizarInstitucion(u.institucion);
+        if (!listaInstitucionesNube.some(item => claveInstitucion(item) === claveInstitucion(inst))) listaInstitucionesNube.push(inst);
+      }
+    });
+    poblarDesplegablesUnidades();
+
     if (usuarioActivo) {
       const actualizado = usuarios.find(u => u.user.toLowerCase() === usuarioActivo.user.toLowerCase());
       if (actualizado) {
@@ -77,7 +240,7 @@ function iniciarSincronizacionNube() {
     }
   });
 
-  // 2. Escuchar Guardias en tiempo real (ordenado por creación más reciente)
+  // 2. Escuchar Guardias en tiempo real
   db.collection('guardias').orderBy('creadaEn', 'desc').onSnapshot(snapshot => {
     const nuevasGuardias = snapshot.docs.map(doc => {
       const data = doc.data();
@@ -85,7 +248,6 @@ function iniciarSincronizacionNube() {
       return data;
     });
 
-    // Detectar guardias nuevas en la unidad para disparar alerta en el dispositivo
     if (cargaInicialCompleta && usuarioActivo) {
       nuevasGuardias.forEach(g => {
         if (!idsGuardiasConocidas.has(g.id) && perteneceAMiUnidad(g) && g.solicitanteUser !== usuarioActivo.user && g.estado === 'Pendiente') {
@@ -158,7 +320,7 @@ async function activarNotificacionesPush() {
     alert("¡Notificaciones activadas correctamente en este dispositivo!");
   } catch (err) {
     console.error("Error obteniendo token:", err);
-    alert("Notificaciones locales activadas. (Si usas iPhone, recuerda instalar primero en pantalla de inicio).");
+    alert("Notificaciones locales activadas.");
   }
 }
 
@@ -319,6 +481,11 @@ function mostrarRegistro(mostrar) {
   document.getElementById('view-register').style.display = mostrar ? 'block' : 'none';
   document.getElementById('view-recover').style.display = 'none';
   fotoTempReg = "";
+  if (mostrar) {
+    poblarDesplegablesUnidades();
+    verificarOpcionNueva('reg', 'zona');
+    verificarOpcionNueva('reg', 'inst');
+  }
 }
 
 function mostrarRecuperar(mostrar) {
@@ -351,7 +518,7 @@ async function restablecerPassword() {
   }
 
   const datos = docSnap.data();
-  if (datos.nombre.toLowerCase() !== nombre.toLowerCase()) {
+  if (limpiarTextoBase(datos.nombre) !== limpiarTextoBase(nombre)) {
     alert("El nombre completo no coincide con el registrado para esa matrícula.");
     return;
   }
@@ -366,18 +533,21 @@ async function registrarUsuario() {
   const user = document.getElementById('reg-user').value.trim();
   const pass = document.getElementById('reg-pass').value.trim();
   const whatsapp = document.getElementById('reg-whatsapp').value.trim();
-  const zona = document.getElementById('reg-zona').value.trim();
-  const institucion = document.getElementById('reg-institucion').value.trim();
+  const zonaRaw = obtenerValorDesplegable('reg', 'zona');
+  const institucionRaw = obtenerValorDesplegable('reg', 'inst');
   const perfil = document.getElementById('reg-perfil').value;
   const hd = Number(document.getElementById('reg-tarifa-d').value) || 650;
   const hn = Number(document.getElementById('reg-tarifa-n').value) || 1300;
 
   const areasSeleccionadas = Array.from(document.querySelectorAll('input[name="reg-area-chk"]:checked')).map(cb => cb.value);
 
-  if (!nombre || !user || !pass || !whatsapp || !zona || !institucion) {
+  if (!nombre || !user || !pass || !whatsapp || !zonaRaw || !institucionRaw) {
     alert("Completa todos los campos obligatorios (*).");
     return;
   }
+
+  const zona = normalizarZona(zonaRaw);
+  const institucion = normalizarInstitucion(institucionRaw);
 
   const docRef = db.collection('usuarios').doc(user.toLowerCase());
   const existe = await docRef.get();
@@ -392,11 +562,12 @@ async function registrarUsuario() {
     honorarioDiurno: hd, honorarioNocturno: hn, foto: fotoTempReg 
   };
 
+  await registrarUnidadEnCatalogoNube(zona, institucion);
   await docRef.set(nuevoUsuario);
 
   usuarioActivo = nuevoUsuario;
   localStorage.setItem('guardia_user_obj', JSON.stringify(usuarioActivo));
-  alert("Registro guardado en la nube con éxito.");
+  alert(`Registro guardado en la nube. Unidad: ${institucion} (${zona}).`);
   mostrarRegistro(false);
   verificarSesion();
   activarNotificacionesPush();
@@ -431,11 +602,33 @@ function logout() {
 function cargarFormularioEditarPerfil() {
   if (!usuarioActivo) return;
   fotoTempEdit = null;
+  poblarDesplegablesUnidades();
+
   document.getElementById('edit-avatar-preview').innerHTML = renderAvatarHTML(usuarioActivo, 'avatar-sm');
   document.getElementById('edit-nombre').value = usuarioActivo.nombre || '';
   document.getElementById('edit-whatsapp').value = usuarioActivo.whatsapp || '';
-  document.getElementById('edit-zona').value = usuarioActivo.zona || '';
-  document.getElementById('edit-institucion').value = usuarioActivo.institucion || '';
+
+  const zonaNorm = normalizarZona(usuarioActivo.zona || '');
+  const instNorm = normalizarInstitucion(usuarioActivo.institucion || '');
+
+  const selZona = document.getElementById('edit-zona-select');
+  const selInst = document.getElementById('edit-inst-select');
+
+  if (selZona && zonaNorm) {
+    if (!Array.from(selZona.options).some(o => o.value === zonaNorm)) {
+      selZona.insertAdjacentHTML('afterbegin', `<option value="${zonaNorm}">${zonaNorm}</option>`);
+    }
+    selZona.value = zonaNorm;
+  }
+  if (selInst && instNorm) {
+    if (!Array.from(selInst.options).some(o => o.value === instNorm)) {
+      selInst.insertAdjacentHTML('afterbegin', `<option value="${instNorm}">${instNorm}</option>`);
+    }
+    selInst.value = instNorm;
+  }
+  verificarOpcionNueva('edit', 'zona');
+  verificarOpcionNueva('edit', 'inst');
+
   document.getElementById('edit-perfil').value = usuarioActivo.perfil || 'Licenciado en Enfermería';
   document.getElementById('edit-tarifa-d').value = usuarioActivo.honorarioDiurno || 650;
   document.getElementById('edit-tarifa-n').value = usuarioActivo.honorarioNocturno || 1300;
@@ -452,17 +645,20 @@ function cargarFormularioEditarPerfil() {
 async function guardarCambiosPerfil() {
   const nombre = document.getElementById('edit-nombre').value.trim();
   const whatsapp = document.getElementById('edit-whatsapp').value.trim();
-  const zona = document.getElementById('edit-zona').value.trim();
-  const institucion = document.getElementById('edit-institucion').value.trim();
+  const zonaRaw = obtenerValorDesplegable('edit', 'zona');
+  const institucionRaw = obtenerValorDesplegable('edit', 'inst');
   const perfil = document.getElementById('edit-perfil').value;
   const hd = Number(document.getElementById('edit-tarifa-d').value) || 650;
   const hn = Number(document.getElementById('edit-tarifa-n').value) || 1300;
   const areasSeleccionadas = Array.from(document.querySelectorAll('input[name="edit-area-chk"]:checked')).map(cb => cb.value);
 
-  if (!nombre || !whatsapp || !zona || !institucion) {
+  if (!nombre || !whatsapp || !zonaRaw || !institucionRaw) {
     alert("Completa los campos obligatorios (*).");
     return;
   }
+
+  const zona = normalizarZona(zonaRaw);
+  const institucion = normalizarInstitucion(institucionRaw);
 
   usuarioActivo.nombre = nombre;
   usuarioActivo.whatsapp = whatsapp;
@@ -474,10 +670,11 @@ async function guardarCambiosPerfil() {
   usuarioActivo.honorarioNocturno = hn;
   if (fotoTempEdit) usuarioActivo.foto = fotoTempEdit;
 
+  await registrarUnidadEnCatalogoNube(zona, institucion);
   await db.collection('usuarios').doc(usuarioActivo.user.toLowerCase()).set(usuarioActivo, { merge: true });
 
   localStorage.setItem('guardia_user_obj', JSON.stringify(usuarioActivo));
-  alert("¡Perfil actualizado en la nube!");
+  alert(`¡Perfil actualizado! Unidad: ${usuarioActivo.institucion} (${usuarioActivo.zona})`);
   verificarSesion();
 }
 
@@ -490,8 +687,8 @@ function verificarSesion() {
     document.getElementById('bottom-tabs').style.display = 'flex';
     document.getElementById('btn-logout').style.display = 'block';
     
-    const zonaTxt = usuarioActivo.zona || 'Sin zona';
-    const instTxt = usuarioActivo.institucion || 'Sin institución';
+    const zonaTxt = normalizarZona(usuarioActivo.zona || '') || 'Sin zona';
+    const instTxt = normalizarInstitucion(usuarioActivo.institucion || '') || 'Sin institución';
 
     document.getElementById('header-avatar-container').innerHTML = renderAvatarHTML(usuarioActivo, 'avatar');
     document.getElementById('user-display').innerText = usuarioActivo.nombre;
@@ -517,10 +714,13 @@ function verificarSesion() {
   }
 }
 
+// =========================================================================
+// FILTRO INTELIGENTE POR UNIDAD
+// =========================================================================
 function perteneceAMiUnidad(item) {
   if (!usuarioActivo) return false;
-  const mismaZona = (item.zona || '').toLowerCase() === (usuarioActivo.zona || '').toLowerCase();
-  const mismaInst = (item.institucion || '').toLowerCase() === (usuarioActivo.institucion || '').toLowerCase();
+  const mismaZona = claveZona(item.zona) === claveZona(usuarioActivo.zona);
+  const mismaInst = claveInstitucion(item.institucion) === claveInstitucion(usuarioActivo.institucion);
   return mismaZona && mismaInst;
 }
 
@@ -555,7 +755,7 @@ function renderAlertas() {
   } else if (disponibles.length > 0) {
     html += `
       <div class="alert-banner">
-        <div><strong>📢 Oferta disponible:</strong> Hay ${disponibles.length} guardia(s) abierta(s) en ${usuarioActivo.institucion}.</div>
+        <div><strong>📢 Oferta disponible:</strong> Hay ${disponibles.length} guardia(s) abierta(s) en ${normalizarInstitucion(usuarioActivo.institucion)}.</div>
       </div>
     `;
   }
@@ -904,8 +1104,8 @@ async function guardarNuevaSolicitud() {
     creadaEn: nuevoId,
     solicitante: usuarioActivo.nombre,
     solicitanteUser: usuarioActivo.user,
-    zona: usuarioActivo.zona,
-    institucion: usuarioActivo.institucion,
+    zona: normalizarZona(usuarioActivo.zona),
+    institucion: normalizarInstitucion(usuarioActivo.institucion),
     fecha: fecha,
     turno: turno,
     servicio: servicio,
@@ -1168,7 +1368,9 @@ function renderPadron() {
 
   colegasUnidad.forEach(e => {
     const esYo = e.user === usuarioActivo.user;
-    const msgWa = `Hola ${e.nombre}, te contacto desde Control de Guardias de ${e.institucion}.`;
+    const instMostrar = normalizarInstitucion(e.institucion || '');
+    const zonaMostrar = normalizarZona(e.zona || '');
+    const msgWa = `Hola ${e.nombre}, te contacto desde Control de Guardias de ${instMostrar}.`;
     
     let card = document.createElement('div');
     card.className = 'card';
@@ -1178,7 +1380,7 @@ function renderPadron() {
         <div style="flex: 1;">
           <strong>${e.nombre}</strong> ${esYo ? '<span class="badge badge-mine">Tú</span>' : ''}<br>
           <span style="font-size: 12px; color: var(--text-muted);">${e.perfil}</span><br>
-          <span style="font-size: 11px; color: var(--primary); font-weight: 600;">${e.institucion || 'Sin unidad'} • ${e.zona || 'Sin zona'}</span>
+          <span style="font-size: 11px; color: var(--primary); font-weight: 600;">${instMostrar || 'Sin unidad'} • ${zonaMostrar || 'Sin zona'}</span>
         </div>
       </div>
       <div style="margin-top: 8px; font-size: 12px;">
@@ -1215,5 +1417,6 @@ setInterval(() => {
 }, 60000);
 
 inicializarSelectoresAreas();
+poblarDesplegablesUnidades();
 iniciarSincronizacionNube();
 verificarSesion();
