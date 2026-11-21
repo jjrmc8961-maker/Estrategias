@@ -94,11 +94,13 @@
       <div style="display: flex; gap: 8px;">
         <div style="flex: 1;">
           <label>Zona / Ciudad *</label>
-          <input type="text" id="reg-zona" placeholder="Ej. Xalapa">
+          <select id="reg-zona-select" onchange="verificarOpcionNueva('reg', 'zona')"></select>
+          <input type="text" id="reg-zona-nueva" placeholder="Escribe la ciudad..." style="display: none; margin-top: 4px;">
         </div>
         <div style="flex: 1;">
           <label>Institución / Unidad *</label>
-          <input type="text" id="reg-institucion" placeholder="Ej. IMSS HGZ 11">
+          <select id="reg-inst-select" onchange="verificarOpcionNueva('reg', 'inst')"></select>
+          <input type="text" id="reg-inst-nueva" placeholder="Ej. CECAN, IMSS..." style="display: none; margin-top: 4px;">
         </div>
       </div>
 
@@ -274,11 +276,13 @@
         <div style="display: flex; gap: 8px;">
           <div style="flex: 1;">
             <label>Zona / Ciudad *</label>
-            <input type="text" id="edit-zona" placeholder="Ej. Xalapa">
+            <select id="edit-zona-select" onchange="verificarOpcionNueva('edit', 'zona')"></select>
+            <input type="text" id="edit-zona-nueva" placeholder="Escribe la ciudad..." style="display: none; margin-top: 4px;">
           </div>
           <div style="flex: 1;">
             <label>Institución / Unidad *</label>
-            <input type="text" id="edit-institucion" placeholder="Ej. IMSS HGZ 11">
+            <select id="edit-inst-select" onchange="verificarOpcionNueva('edit', 'inst')"></select>
+            <input type="text" id="edit-inst-nueva" placeholder="Ej. CECAN, IMSS..." style="display: none; margin-top: 4px;">
           </div>
         </div>
 
