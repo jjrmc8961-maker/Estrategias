@@ -1,0 +1,16 @@
+{
+  "name": "estrategias-guardias",
+  "version": "1.0.0",
+  "description": "Plataforma de Gestión Operativa y Relevos Clínicos",
+  "private": true,
+  "scripts": {
+    "build": "mkdir -p www && cp index.html app.js styles.css manifest.json sw.js www/"
+  },
+  "dependencies": {
+    "@capacitor/android": "^6.1.2",
+    "@capacitor/core": "^6.1.2"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^6.1.2"
+  }
+}
