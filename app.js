@@ -30,6 +30,60 @@ if ('serviceWorker' in navigator) {
 }
 
 // =========================================================================
+// CONFIGURACIÓN DE ALERTAS POR CORREO (EMAILJS - ANDROID & IPHONE)
+// =========================================================================
+let EMAILJS_CONFIG = {
+  publicKey: "",
+  serviceId: "",
+  templateId: ""
+};
+
+async function cargarConfigEmailJS() {
+  try {
+    const doc = await db.collection('config').doc('emailjs').get();
+    if (doc.exists) {
+      const data = doc.data();
+      EMAILJS_CONFIG.publicKey = (data.publicKey || "").trim();
+      EMAILJS_CONFIG.serviceId = (data.serviceId || "").trim();
+      EMAILJS_CONFIG.templateId = (data.templateId || "").trim();
+      if (window.emailjs && EMAILJS_CONFIG.publicKey) {
+        window.emailjs.init({ publicKey: EMAILJS_CONFIG.publicKey });
+      }
+    }
+  } catch (e) {
+    console.warn("Config EmailJS:", e);
+  }
+}
+
+async function enviarAlertaCorreo({ destinatarios, titulo, mensaje }) {
+  if (!EMAILJS_CONFIG.publicKey || !EMAILJS_CONFIG.serviceId || !EMAILJS_CONFIG.templateId) {
+    await cargarConfigEmailJS();
+  }
+  if (!window.emailjs || !EMAILJS_CONFIG.publicKey || !EMAILJS_CONFIG.serviceId || !EMAILJS_CONFIG.templateId) {
+    return;
+  }
+
+  const correosUnicos = Array.from(new Set(
+    (destinatarios || [])
+      .map(c => (c || "").trim().toLowerCase())
+      .filter(c => c.includes("@"))
+  ));
+
+  for (const correo of correosUnicos) {
+    try {
+      await window.emailjs.send(EMAILJS_CONFIG.serviceId, EMAILJS_CONFIG.templateId, {
+        to_email: correo,
+        titulo: titulo,
+        mensaje: mensaje,
+        app_url: "https://jjrmc8961-maker.github.io/Estrategias/"
+      });
+    } catch (err) {
+      console.warn("Error enviando correo a " + correo + ":", err);
+    }
+  }
+}
+
+// =========================================================================
 // CONFIGURACIÓN ONESIGNAL PUSH EN SEGUNDO PLANO (SEGURA DESDE FIRESTORE)
 // =========================================================================
 const ONESIGNAL_APP_ID = "952b86f7-a6b9-4649-9c60-f24744ac4027";
@@ -344,7 +398,52 @@ function iniciarSincronizacionNube() {
   });
 }
 
-function mostrarNotificacionLocal(titulo, cuerpo) {
+// =========================================================================
+// NOTIFICACIÓN FLOTANTE NATIVA (CAPACITOR APK + WEB)
+// =========================================================================
+async function inicializarCanalNotificacionesNativo() {
+  try {
+    if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.LocalNotifications) {
+      const { LocalNotifications } = window.Capacitor.Plugins;
+      await LocalNotifications.requestPermissions();
+      await LocalNotifications.createChannel({
+        id: 'guardias_urgentes',
+        name: 'Alertas de Guardias',
+        description: 'Notificaciones flotantes de nuevas guardias y coberturas',
+        importance: 5,
+        visibility: 1,
+        vibration: true
+      });
+    }
+  } catch (e) {
+    console.warn("Canal nativo:", e);
+  }
+}
+
+async function mostrarNotificacionLocal(titulo, cuerpo) {
+  try {
+    if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.LocalNotifications) {
+      const { LocalNotifications } = window.Capacitor.Plugins;
+      await LocalNotifications.requestPermissions();
+      await LocalNotifications.schedule({
+        notifications: [
+          {
+            title: titulo,
+            body: cuerpo,
+            id: Math.floor(Date.now() % 2147483647),
+            channelId: 'guardias_urgentes',
+            schedule: { at: new Date(Date.now() + 400) },
+            importance: 5,
+            visibility: 1
+          }
+        ]
+      });
+      return;
+    }
+  } catch (e) {
+    console.warn("Error notificación nativa Capacitor:", e);
+  }
+
   if ('Notification' in window && Notification.permission === 'granted') {
     if (swRegistration) {
       swRegistration.showNotification(titulo, {
@@ -358,8 +457,22 @@ function mostrarNotificacionLocal(titulo, cuerpo) {
 }
 
 async function activarNotificacionesPush() {
+  try {
+    if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.LocalNotifications) {
+      await inicializarCanalNotificacionesNativo();
+      await mostrarNotificacionLocal(
+        "🔔 Alertas Flotantes Activas",
+        "Recibirás avisos emergentes de guardias disponibles en tu dispositivo."
+      );
+      alert("🔔 ¡Notificaciones flotantes nativas activadas en este dispositivo!");
+      return;
+    }
+  } catch (e) {
+    console.warn("Capacitor push:", e);
+  }
+
   if (!window.OneSignalDeferred) {
-    alert("Cargando servicio de notificaciones, intenta de nuevo en 3 segundos.");
+    alert("Las alertas por correo electrónico ya están activas para tu cuenta.");
     return;
   }
   window.OneSignalDeferred.push(async function(OneSignal) {
@@ -368,10 +481,10 @@ async function activarNotificacionesPush() {
       if (usuarioActivo) {
         registrarDispositivoOneSignal(usuarioActivo);
       }
-      alert("🔔 ¡Notificaciones en segundo plano activadas en este dispositivo!");
+      alert("🔔 ¡Notificaciones activadas en este dispositivo!");
     } catch (e) {
       console.error("Error activando notificaciones:", e);
-      alert("Asegúrate de permitir las notificaciones en los ajustes de tu navegador.");
+      alert("Asegúrate de tener tu correo guardado en Mi Perfil para recibir alertas automáticas.");
     }
   });
 }
@@ -598,6 +711,7 @@ async function registrarUsuario() {
   const user = document.getElementById('reg-user').value.trim();
   const pass = document.getElementById('reg-pass').value.trim();
   const whatsapp = document.getElementById('reg-whatsapp').value.trim();
+  const email = (document.getElementById('reg-email')?.value || "").trim().toLowerCase();
   const zonaRaw = obtenerValorDesplegable('reg', 'zona');
   const institucionRaw = obtenerValorDesplegable('reg', 'inst');
   const perfil = document.getElementById('reg-perfil').value;
@@ -622,7 +736,7 @@ async function registrarUsuario() {
   }
 
   const nuevoUsuario = { 
-    user, pass, nombre, whatsapp, zona, institucion, perfil, 
+    user, pass, nombre, whatsapp, email, zona, institucion, perfil, 
     areas: areasSeleccionadas.length > 0 ? areasSeleccionadas : ["Hospitalización"], 
     honorarioDiurno: hd, honorarioNocturno: hn, foto: fotoTempReg 
   };
@@ -672,6 +786,8 @@ function cargarFormularioEditarPerfil() {
   document.getElementById('edit-avatar-preview').innerHTML = renderAvatarHTML(usuarioActivo, 'avatar-sm');
   document.getElementById('edit-nombre').value = usuarioActivo.nombre || '';
   document.getElementById('edit-whatsapp').value = usuarioActivo.whatsapp || '';
+  const editEmailEl = document.getElementById('edit-email');
+  if (editEmailEl) editEmailEl.value = usuarioActivo.email || '';
 
   const zonaNorm = normalizarZona(usuarioActivo.zona || '');
   const instNorm = normalizarInstitucion(usuarioActivo.institucion || '');
@@ -710,6 +826,7 @@ function cargarFormularioEditarPerfil() {
 async function guardarCambiosPerfil() {
   const nombre = document.getElementById('edit-nombre').value.trim();
   const whatsapp = document.getElementById('edit-whatsapp').value.trim();
+  const email = (document.getElementById('edit-email')?.value || usuarioActivo.email || "").trim().toLowerCase();
   const zonaRaw = obtenerValorDesplegable('edit', 'zona');
   const institucionRaw = obtenerValorDesplegable('edit', 'inst');
   const perfil = document.getElementById('edit-perfil').value;
@@ -727,6 +844,7 @@ async function guardarCambiosPerfil() {
 
   usuarioActivo.nombre = nombre;
   usuarioActivo.whatsapp = whatsapp;
+  usuarioActivo.email = email;
   usuarioActivo.zona = zona;
   usuarioActivo.institucion = institucion;
   usuarioActivo.perfil = perfil;
@@ -760,7 +878,9 @@ function verificarSesion() {
     document.getElementById('unit-display').innerText = `${instTxt} • ${zonaTxt}`;
     document.getElementById('lbl-unidad-activa').innerText = `${instTxt} (${zonaTxt})`;
     
+    cargarConfigEmailJS();
     cargarLlaveNotificaciones();
+    inicializarCanalNotificacionesNativo();
     registrarDispositivoOneSignal(usuarioActivo);
 
     cargarFormularioEditarPerfil();
@@ -1066,6 +1186,7 @@ async function postularme(idGuardia) {
     nombre: usuarioActivo.nombre,
     perfil: usuarioActivo.perfil,
     whatsapp: usuarioActivo.whatsapp,
+    email: usuarioActivo.email || "",
     montoPropuesto: montoPropuesto,
     fechaPostulacion: Date.now()
   }];
@@ -1073,6 +1194,16 @@ async function postularme(idGuardia) {
   await db.collection('guardias').doc(String(idGuardia)).update({
     postulantes: nuevosPostulantes
   });
+
+  const solicitanteObj = usuarios.find(u => u.user === g.solicitanteUser);
+  if (solicitanteObj && solicitanteObj.email) {
+    enviarAlertaCorreo({
+      destinatarios: [solicitanteObj.email],
+      titulo: `🙋‍♂️ Nuevo postulante para tu guardia (${g.servicio})`,
+      mensaje: `${usuarioActivo.nombre} (${usuarioActivo.perfil}) se postuló para cubrir tu guardia del ${g.fecha} (${g.turno}) por $${montoPropuesto} MXN.`
+    });
+  }
+
   alert(`¡Te has postulado por $${montoPropuesto} MXN!`);
 }
 
@@ -1103,6 +1234,16 @@ async function elegirPostulante(idGuardia, indexPostulante) {
       montoPactado: elegido.montoPropuesto,
       estado: 'Asignada'
     });
+
+    const elegidoObj = usuarios.find(u => u.user === elegido.user);
+    const correoElegido = elegido.email || (elegidoObj ? elegidoObj.email : "");
+    if (correoElegido) {
+      enviarAlertaCorreo({
+        destinatarios: [correoElegido],
+        titulo: `✅ ¡Guardia Confirmada en ${g.servicio}!`,
+        mensaje: `${usuarioActivo.nombre} confirmó tu cobertura para el ${g.fecha} (${g.turno}) en ${g.institucion} por $${elegido.montoPropuesto} MXN.`
+      });
+    }
 
     enviarPushSegundoPlano({
       titulo: `✅ ¡Guardia Confirmada!`,
@@ -1215,6 +1356,18 @@ async function guardarNuevaSolicitud() {
 
   cerrarModalSolicitud();
   await db.collection('guardias').doc(String(nuevoId)).set(nuevaGuardia);
+
+  const correosColegas = usuarios
+    .filter(u => u.user !== usuarioActivo.user && perteneceAMiUnidad(u) && u.email)
+    .map(u => u.email);
+
+  if (correosColegas.length > 0) {
+    enviarAlertaCorreo({
+      destinatarios: correosColegas,
+      titulo: `🚨 Nueva Guardia en ${instNorm} (${servicio})`,
+      mensaje: `${usuarioActivo.nombre} solicita relevo el ${fecha} • Turno ${turno} (${horaInicio} - ${horaFin}) • Honorario: $${honorario} MXN.`
+    });
+  }
 
   enviarPushSegundoPlano({
     titulo: `🚨 Nueva Guardia en ${instNorm}`,
