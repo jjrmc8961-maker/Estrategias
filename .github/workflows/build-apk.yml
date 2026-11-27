@@ -29,10 +29,11 @@ jobs:
           npm install
           npm run build
 
-      - name: Generar proyecto Android con Capacitor
+            - name: Generar proyecto Android con Capacitor
         run: |
           npx cap add android
           npx cap sync android
+          sed -i 's/<application/<uses-permission android:name="android.permission.POST_NOTIFICATIONS" \/>\n    <application/' android/app/src/main/AndroidManifest.xml
 
       - name: Compilar APK Debug instalable
         run: |
