@@ -4,7 +4,7 @@
   "description": "Plataforma de Gestión Operativa y Relevos Clínicos",
   "private": true,
   "scripts": {
-    "build": "mkdir -p www && cp index.html app.js styles.css manifest.json sw.js www/"
+    "build": "mkdir -p www && cp *.html *.js *.css www/ && cp -f manifest.json www/ 2>/dev/null || true"
   },
   "dependencies": {
     "@capacitor/android": "^6.1.2",
@@ -14,3 +14,4 @@
     "@capacitor/cli": "^6.1.2"
   }
 }
+
